@@ -84,18 +84,32 @@ func DefaultServerMetadata() ServerMetadata {
 						Description: "Set to 'true' to force copying file content as text (only with 'file' parameter). USEFUL PATTERN: Write code to /tmp/script.ext, edit incrementally with Edit tool, then copy with file='/tmp/script.ext' force_text='true' for efficient iterative development without regenerating full text.",
 						Type:        paramTypeString,
 					},
+					{
+						Name:        "mime_type",
+						Description: "Optional MIME type or UTI to apply when copying text content (e.g. text/html, application/json).",
+						Type:        paramTypeString,
+					},
 				},
 			},
 			{
 				Name:        "clipboard_paste",
-				Description: "Paste clipboard content to file or directory. Intelligently handles both text content and file references from clipboard.",
+				Description: "Paste clipboard content to file or directory. Intelligently handles both text content and file references from clipboard. Set return_text to retrieve plain text without writing files.",
 				Params: []ToolParamSpec{
 					{
 						Name:        "destination",
 						Description: "Destination directory (defaults to current directory)",
 						Type:        paramTypeString,
 					},
+					{
+						Name:        "return_text",
+						Description: "Set to 'true' to return plain text in the response instead of writing files.",
+						Type:        paramTypeString,
+					},
 				},
+			},
+			{
+				Name:        "clipboard_info",
+				Description: "Inspect clipboard types and sizes (metadata only). Useful for debugging pasteboard contents.",
 			},
 			{
 				Name:        "get_recent_downloads",

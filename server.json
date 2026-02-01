@@ -33,6 +33,10 @@
           "force_text": {
             "type": "string",
             "description": "Set to 'true' to force copying file content as text"
+          },
+          "mime_type": {
+            "type": "string",
+            "description": "Optional MIME type or UTI to apply when copying text content (e.g. text/html, application/json)"
           }
         }
       }
@@ -46,8 +50,20 @@
           "destination": {
             "type": "string",
             "description": "Destination directory (defaults to current directory)"
+          },
+          "return_text": {
+            "type": "string",
+            "description": "Set to 'true' to return plain text in the response instead of writing files"
           }
         }
+      }
+    },
+    {
+      "name": "clipboard_info",
+      "description": "Inspect clipboard types and sizes (metadata only). Useful for debugging pasteboard contents.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
       }
     },
     {

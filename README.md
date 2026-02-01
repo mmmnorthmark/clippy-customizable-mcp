@@ -175,7 +175,8 @@ Add to your config (`~/Library/Application Support/Claude/claude_desktop_config.
 #### System Clipboard Tools
 
 - **clipboard_copy** - Copy text or files to system clipboard
-- **clipboard_paste** - Paste clipboard content to files/directories
+- **clipboard_paste** - Paste clipboard content to files/directories (or return plain text with metadata)
+- **clipboard_info** - Inspect clipboard content types and size metadata
 - **get_recent_downloads** - List recently downloaded files
 
 #### Agent Buffer Tools

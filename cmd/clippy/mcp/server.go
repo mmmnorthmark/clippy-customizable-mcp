@@ -11,19 +11,34 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/neilberkman/clippy"
+	"github.com/neilberkman/clippy/pkg/clipboard"
 	"github.com/neilberkman/clippy/pkg/recent"
 )
+
+const (
+	maxMCPOutputTokens    = 25000
+	bytesPerTokenEstimate = 4
+)
+
+func estimateTokensFromBytes(size int) int {
+	if size <= 0 {
+		return 0
+	}
+	return (size + bytesPerTokenEstimate - 1) / bytesPerTokenEstimate
+}
 
 // CopyArgs defines arguments for the copy tool
 type CopyArgs struct {
 	Text      string `json:"text,omitempty" jsonschema:"description=Text content to copy to clipboard"`
 	File      string `json:"file,omitempty" jsonschema:"description=File path to copy to clipboard"`
 	ForceText string `json:"force_text,omitempty" jsonschema:"description=Set to 'true' to force copying file content as text (only used with 'file' parameter)"`
+	MimeType  string `json:"mime_type,omitempty" jsonschema:"description=Optional MIME type or UTI to apply when copying text content"`
 }
 
 // PasteArgs defines arguments for the paste tool
 type PasteArgs struct {
 	Destination string `json:"destination,omitempty" jsonschema:"description=Directory to paste files to (defaults to current directory)"`
+	ReturnText  string `json:"return_text,omitempty" jsonschema:"description=Set to 'true' to return plain text instead of writing files"`
 }
 
 // BufferCutArgs defines arguments for buffer_cut tool
@@ -48,10 +63,29 @@ type CopyResult struct {
 
 // PasteResult defines the result of a paste operation
 type PasteResult struct {
-	Success bool     `json:"success"`
-	Files   []string `json:"files,omitempty" jsonschema:"description=List of files that were pasted"`
-	Text    string   `json:"text,omitempty" jsonschema:"description=Text content that was pasted"`
-	Message string   `json:"message,omitempty"`
+	Success          bool     `json:"success"`
+	Files            []string `json:"files,omitempty" jsonschema:"description=List of files that were pasted"`
+	Text             string   `json:"text,omitempty" jsonschema:"description=Text content that was pasted"`
+	Message          string   `json:"message,omitempty"`
+	ContentTypes     []string `json:"content_types,omitempty" jsonschema:"description=Clipboard content types present"`
+	ContentSizeBytes int      `json:"content_size_bytes,omitempty" jsonschema:"description=Size of returned text content in bytes"`
+	PrimaryType      string   `json:"primary_type,omitempty" jsonschema:"description=Primary clipboard type detected"`
+}
+
+// ClipboardTypeInfo describes clipboard type metadata.
+type ClipboardTypeInfo struct {
+	Type      string `json:"type"`
+	SizeBytes int    `json:"size_bytes,omitempty"`
+}
+
+// ClipboardInfoResult describes clipboard metadata without returning content.
+type ClipboardInfoResult struct {
+	Types          []ClipboardTypeInfo `json:"types,omitempty"`
+	PrimaryType    string              `json:"primary_type,omitempty"`
+	TextLength     int                 `json:"text_length,omitempty"`
+	FileCount      int                 `json:"file_count,omitempty"`
+	FilePaths      []string            `json:"file_paths,omitempty"`
+	TotalSizeBytes int                 `json:"total_size_bytes,omitempty"`
 }
 
 // RecentFile represents a recent download
@@ -118,6 +152,10 @@ func StartServerWithOptions(opts ServerOptions) error {
 	if err != nil {
 		return err
 	}
+	clipboardInfoSpec, err := requireToolSpec(toolSpecs, "clipboard_info")
+	if err != nil {
+		return err
+	}
 	recentSpec, err := requireToolSpec(toolSpecs, "get_recent_downloads")
 	if err != nil {
 		return err
@@ -173,6 +211,10 @@ func StartServerWithOptions(opts ServerOptions) error {
 	if err != nil {
 		return err
 	}
+	copyMimeDesc, err := toolParamDescription(copySpec, "mime_type")
+	if err != nil {
+		return err
+	}
 
 	copyTool := mcp.NewTool(
 		"clipboard_copy",
@@ -180,6 +222,7 @@ func StartServerWithOptions(opts ServerOptions) error {
 		mcp.WithString("text", mcp.Description(copyTextDesc)),
 		mcp.WithString("file", mcp.Description(copyFileDesc)),
 		mcp.WithString("force_text", mcp.Description(copyForceTextDesc)),
+		mcp.WithString("mime_type", mcp.Description(copyMimeDesc)),
 	)
 
 	// Add copy tool handler
@@ -199,11 +242,18 @@ func StartServerWithOptions(opts ServerOptions) error {
 			return nil, fmt.Errorf("provide either text or file to copy")
 		}
 
+		mimeType := strings.TrimSpace(args.MimeType)
+
 		var result CopyResult
 
 		if args.Text != "" {
 			// Copy text
-			err := clippy.CopyText(args.Text)
+			var err error
+			if mimeType != "" {
+				err = clippy.CopyTextWithType(args.Text, mimeType)
+			} else {
+				err = clippy.CopyText(args.Text)
+			}
 			if err != nil {
 				result = CopyResult{
 					Success: false,
@@ -229,21 +279,37 @@ func StartServerWithOptions(opts ServerOptions) error {
 			}
 
 			forceText := args.ForceText == "true" || args.ForceText == "1"
-			copyResult, err := clippy.CopyWithResultAndMode(absPath, forceText)
-			if err != nil {
-				result = CopyResult{
-					Success: false,
-					Message: fmt.Sprintf("Failed to copy file: %v", err),
+			if mimeType != "" {
+				err = clippy.CopyFileAsTextWithType(absPath, mimeType)
+				if err != nil {
+					result = CopyResult{
+						Success: false,
+						Message: fmt.Sprintf("Failed to copy file as text: %v", err),
+					}
+				} else {
+					result = CopyResult{
+						Success: true,
+						Type:    "text content",
+						Message: fmt.Sprintf("Copied %s as text (%s)", filepath.Base(absPath), mimeType),
+					}
 				}
 			} else {
-				typeStr := "file"
-				if copyResult.AsText {
-					typeStr = "text content"
-				}
-				result = CopyResult{
-					Success: true,
-					Type:    typeStr,
-					Message: fmt.Sprintf("Copied %s as %s", filepath.Base(absPath), typeStr),
+				copyResult, err := clippy.CopyWithResultAndMode(absPath, forceText)
+				if err != nil {
+					result = CopyResult{
+						Success: false,
+						Message: fmt.Sprintf("Failed to copy file: %v", err),
+					}
+				} else {
+					typeStr := "file"
+					if copyResult.AsText {
+						typeStr = "text content"
+					}
+					result = CopyResult{
+						Success: true,
+						Type:    typeStr,
+						Message: fmt.Sprintf("Copied %s as %s", filepath.Base(absPath), typeStr),
+					}
 				}
 			}
 		}
@@ -263,11 +329,16 @@ func StartServerWithOptions(opts ServerOptions) error {
 	if err != nil {
 		return err
 	}
+	pasteReturnTextDesc, err := toolParamDescription(pasteSpec, "return_text")
+	if err != nil {
+		return err
+	}
 
 	pasteTool := mcp.NewTool(
 		"clipboard_paste",
 		mcp.WithDescription(pasteSpec.Description),
 		mcp.WithString("destination", mcp.Description(pasteDestDesc)),
+		mcp.WithString("return_text", mcp.Description(pasteReturnTextDesc)),
 	)
 
 	// Add paste tool handler
@@ -276,6 +347,47 @@ func StartServerWithOptions(opts ServerOptions) error {
 		argsBytes, _ := json.Marshal(request.Params.Arguments)
 		if err := json.Unmarshal(argsBytes, &args); err != nil {
 			return nil, fmt.Errorf("invalid arguments: %w", err)
+		}
+
+		returnText := args.ReturnText == "true" || args.ReturnText == "1"
+		if returnText {
+			types := clipboard.GetClipboardTypes()
+			text, hasText := clipboard.GetText()
+			if !hasText {
+				return nil, fmt.Errorf("clipboard does not contain plain text; use file paste mode or inspect with clipboard_info")
+			}
+
+			textBytes := len([]byte(text))
+			estimatedTokens := estimateTokensFromBytes(textBytes)
+			if estimatedTokens > maxMCPOutputTokens {
+				return nil, fmt.Errorf(
+					"clipboard text is too large for MCP response: %d bytes (~%d tokens) exceeds %d-token safety limit; use destination paste mode instead",
+					textBytes,
+					estimatedTokens,
+					maxMCPOutputTokens,
+				)
+			}
+
+			primaryType := "public.utf8-plain-text"
+			if content, err := clipboard.GetClipboardContent(); err == nil && content != nil && content.Type != "" {
+				primaryType = content.Type
+			}
+
+			result := PasteResult{
+				Success:          true,
+				Text:             text,
+				Message:          "Retrieved text from clipboard",
+				ContentTypes:     types,
+				ContentSizeBytes: textBytes,
+				PrimaryType:      primaryType,
+			}
+			resultJSON, _ := json.Marshal(result)
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{mcp.TextContent{
+					Type: "text",
+					Text: string(resultJSON),
+				}},
+			}, nil
 		}
 
 		// Default to current directory
@@ -289,10 +401,25 @@ func StartServerWithOptions(opts ServerOptions) error {
 			// If that fails, try getting text content
 			text, hasText := clippy.GetText()
 			if hasText {
+				textBytes := len([]byte(text))
+				estimatedTokens := estimateTokensFromBytes(textBytes)
+				if estimatedTokens > maxMCPOutputTokens {
+					return nil, fmt.Errorf(
+						"clipboard text is too large for MCP response: %d bytes (~%d tokens) exceeds %d-token safety limit",
+						textBytes,
+						estimatedTokens,
+						maxMCPOutputTokens,
+					)
+				}
+				types := clipboard.GetClipboardTypes()
+
 				result := PasteResult{
-					Success: true,
-					Text:    text,
-					Message: "Retrieved text from clipboard",
+					Success:          true,
+					Text:             text,
+					Message:          "Retrieved text from clipboard",
+					ContentTypes:     types,
+					ContentSizeBytes: textBytes,
+					PrimaryType:      "public.utf8-plain-text",
 				}
 				resultJSON, _ := json.Marshal(result)
 				return &mcp.CallToolResult{
@@ -330,6 +457,54 @@ func StartServerWithOptions(opts ServerOptions) error {
 				result.Text = pasteResult.Files[0] // Text saved to file
 				result.Message = fmt.Sprintf("Pasted text content to %s", pasteResult.Files[0])
 			}
+		}
+
+		resultJSON, _ := json.Marshal(result)
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{mcp.TextContent{
+				Type: "text",
+				Text: string(resultJSON),
+			}},
+		}, nil
+	})
+
+	// Define clipboard_info tool
+	clipboardInfoTool := mcp.NewTool(
+		"clipboard_info",
+		mcp.WithDescription(clipboardInfoSpec.Description),
+	)
+
+	// Add clipboard_info tool handler
+	s.AddTool(clipboardInfoTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		typeStrings := clipboard.GetClipboardTypes()
+		typeInfos := make([]ClipboardTypeInfo, 0, len(typeStrings))
+		totalSize := 0
+
+		for _, typeStr := range typeStrings {
+			typeInfo := ClipboardTypeInfo{Type: typeStr}
+			if data, ok := clipboard.GetClipboardDataForType(typeStr); ok {
+				typeInfo.SizeBytes = len(data)
+				totalSize += len(data)
+			}
+			typeInfos = append(typeInfos, typeInfo)
+		}
+
+		files := clipboard.GetFiles()
+		text, hasText := clipboard.GetText()
+
+		result := ClipboardInfoResult{
+			Types:          typeInfos,
+			FileCount:      len(files),
+			TotalSizeBytes: totalSize,
+		}
+		if len(files) > 0 {
+			result.FilePaths = files
+		}
+		if hasText {
+			result.TextLength = len([]byte(text))
+		}
+		if content, err := clipboard.GetClipboardContent(); err == nil && content != nil {
+			result.PrimaryType = content.Type
 		}
 
 		resultJSON, _ := json.Marshal(result)

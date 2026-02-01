@@ -240,7 +240,8 @@ The MCP server allows AI assistants like Claude to interact with your clipboard 
 
 Available tools:
 - clipboard_copy: Copy text or files to clipboard
-- clipboard_paste: Paste clipboard content to files
+- clipboard_paste: Paste clipboard content to files or return plain text
+- clipboard_info: Inspect clipboard content types and sizes
 - get_recent_downloads: List recently downloaded files
 
 Example usage with Claude Desktop:

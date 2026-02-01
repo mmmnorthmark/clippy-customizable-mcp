@@ -16,6 +16,10 @@
         "force_text": {
           "type": "string",
           "description": "Set to 'true' to copy file contents as text"
+        },
+        "mime_type": {
+          "type": "string",
+          "description": "Optional MIME type or UTI to apply when copying text content"
         }
       }
     }
@@ -29,8 +33,20 @@
         "destination": {
           "type": "string",
           "description": "Target directory for pasted files (defaults to current directory)"
+        },
+        "return_text": {
+          "type": "string",
+          "description": "Set to 'true' to return plain text instead of writing files"
         }
       }
+    }
+  },
+  {
+    "name": "clipboard_info",
+    "description": "Inspect clipboard types and sizes (metadata only). Useful for debugging pasteboard contents.",
+    "parameters": {
+      "type": "object",
+      "properties": {}
     }
   },
   {
